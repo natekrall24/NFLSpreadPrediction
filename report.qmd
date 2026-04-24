@@ -1,0 +1,281 @@
+---
+title: "Predicting NFL Margins with Gaussian Processes: A Replication and Extension of Warner (2010)"
+author: "Nate Krall & [Partner Name]"
+date: "April 26, 2026"
+format:
+  pdf:
+    toc: true
+    number-sections: true
+    fig-pos: "H"
+    geometry: margin=1in
+    fontsize: 11pt
+execute:
+  echo: true
+  eval: false
+  warning: false
+  message: false
+---
+
+```{python}
+#| echo: false
+#| eval: false
+# Full analysis code is in nfl_gp_starter.ipynb
+```
+
+# Introduction
+
+*[2–3 paragraphs. Address: What is the sports analytics question? Why does it matter? What did Warner (2010) find, and what is our extension?]*
+
+Warner (2010) asks whether a statistical model trained purely on box-score team statistics can predict NFL game margins of victory — and whether it can compete with Vegas point spreads. Using a Gaussian Process (GP) regressor on data from the 2000–2009 NFL seasons, Warner found that his model achieved roughly 64% winner accuracy compared to Vegas's 68.5%, with comparable mean absolute error on margin of victory (~11.5 vs. ~11.3 points).
+
+We replicate Warner's methodology on modern data (2015–2024) to ask a new question: **has Vegas gotten sharper in the 15 years since the paper was published?** If the GP's accuracy has stayed flat while Vegas has improved, that would suggest the sportsbook market has become more informationally efficient over time.
+
+*[Add one paragraph on why this is interesting/relevant. Consider: growth of sports betting, algorithmic lines, sharper bettors.]*
+
+---
+
+# Sports Question and Background
+
+*[1–2 paragraphs. What exactly is a "point spread"? What does it mean to "beat Vegas"? What is the practical and statistical significance of the question?]*
+
+*[Briefly describe what made Warner's paper novel — the GP gives both a prediction and a confidence interval, which is unusual for sports prediction models.]*
+
+---
+
+# Data
+
+## Source and Scope
+
+*[Describe where the data came from and what it covers.]*
+
+Game-level results and Vegas point spreads come from the `nflverse` public dataset (`games.csv`), which contains every NFL regular-season game since 1999. Play-by-play data for computing per-game team statistics comes from `nflverse-data` season files. Our analysis covers the **2015–2024** regular seasons: 2,623 games in total, with 2015–2022 used for training and 2023–2024 as the held-out test set.
+
+## Features
+
+*[Describe the feature construction. Use the table below as a starting point — fill in the right-hand column.]*
+
+We construct 46 features per matchup (23 per team) from the play-by-play data, mirroring and extending Warner's original feature set. All features are computed using only games played **prior to the current week** to prevent data leakage.
+
+| Feature Group | Variables | Teams |
+|---|---|---|
+| Season-to-date averages | Points scored/allowed, total/rush/pass yards, turnovers taken/lost | Home + Away |
+| 4-game rolling averages | Same 10 stats as above | Home + Away |
+| Win percentage | Season-to-date, 4-game rolling | Home + Away |
+| Computed strength | Keener eigenvalue ranking (Section 3.2) | Home + Away |
+
+*[Add one sentence on why season-to-date vs. rolling averages — what each captures.]*
+
+## Train / Test Split
+
+*[One paragraph on the split strategy and why it mirrors Warner's setup.]*
+
+---
+
+# Methods
+
+## Gaussian Process Regression
+
+*[2–3 paragraphs. What is a GP? What does it give you that linear regression does not? Keep it accessible — you can reference the Background section of the student assignment for phrasing.]*
+
+A Gaussian Process (GP) is a nonparametric Bayesian regression model. Unlike linear regression, which produces a single predicted value for each input, a GP returns a **full predictive distribution**: a predicted margin and a calibrated uncertainty estimate (standard deviation). This is especially useful for sports prediction, where the confidence in a prediction varies — a matchup between two evenly-matched teams should carry higher uncertainty than one between a dominant and a weak team.
+
+*[Describe the kernel intuitively: it encodes the assumption that teams with similar statistics should have similar outcomes.]*
+
+## Kernel Choice
+
+*[1–2 paragraphs. Describe the RBF + WhiteKernel combination. What does each term represent? What are the learned parameters (length scale, noise level) and what do they mean in context?]*
+
+We use the same kernel as Warner: a **squared-exponential (RBF) kernel** plus a **WhiteKernel** to capture irreducible noise:
+
+$$k(x_i, x_j) = \sigma^2 \exp\left(-\frac{\|x_i - x_j\|^2}{2\ell^2}\right) + \sigma_n^2 \delta_{ij}$$
+
+*[Interpret $\ell$ and $\sigma_n^2$ in the context of NFL prediction. What does a large noise level imply?]*
+
+## Computed Strength Rankings
+
+*[1 paragraph. Describe the Keener eigenvalue ranking from Warner Section 2.2.1. Why is this more informative than a simple win-loss record?]*
+
+Following Warner Section 2.2.1, we compute an eigenvalue-based strength rating for each team at each week of the season. The rating is the dominant eigenvector of a matrix $A$ where each entry $A_{ij}$ encodes how decisively team $i$ has outperformed team $j$ in their head-to-head history, smoothed by the function $h(x) = 0.5 + 0.5 \cdot \text{sgn}(x - 0.5) \cdot \sqrt{|2x-1|}$. This dampens blowout wins, rewarding consistent performance over margin-of-victory inflation.
+
+## Feature Selection
+
+*[1–2 paragraphs. Describe the two-stage process: screening then forward search. What was the base set? What was the final selected set?]*
+
+Warner used a forward search to identify a 4-feature model from a larger candidate pool. We replicate this process on our 2015–2022 training data using leave-one-season-out cross-validation. Starting from a base set of home and away win percentage, we screened all 44 remaining candidates by CV MAE, then ran a greedy forward search over the top 20 to select features that reduce validation error.
+
+Our search converged on **8 features**:
+
+- `H_win_pct`, `A_win_pct` (base set)
+- `A_points_scored_avg`, `H_computed_strength`
+- `A_total_yards_avg`, `A_total_yards_streak`
+- `H_points_allowed_streak`, `A_turnovers_lost_avg`
+
+*[Note the pattern: 5 of 8 are away-team features. What might this suggest about home field advantage in modern NFL?]*
+
+## Betting Framework
+
+*[1 paragraph. Describe Warner's Section 4.2 betting rule. What is the intuition behind using the GP's uncertainty to filter bets?]*
+
+Warner proposes betting only when the GP's prediction disagrees with Vegas by more than $k$ standard deviations. A home bet is placed when $\hat{y} - k\sigma > s$ (the model is confident the home team covers), and an away bet when $\hat{y} + k\sigma < s$. At standard −110 vig, the break-even win rate is **52.4%**.
+
+---
+
+# Results
+
+## Era Comparison: Has Vegas Gotten Sharper?
+
+*[1–2 paragraphs walking through the table below. The headline finding is that Vegas's winner accuracy jumped from ~68.5% to 72.1% while the GP stayed flat at 64.4%.]*
+
+![Era comparison: GP vs. Vegas across two data windows.](slide11_era_comparison.png){width=95%}
+
+*[Interpret: what does the flat GP accuracy + rising Vegas accuracy tell us about market efficiency?]*
+
+## Feature Selection Results
+
+*[1 paragraph. The 8-feature set improves winner accuracy from 64.4% to 67.1% but doesn't improve MAE. What does this mean?]*
+
+![Feature selection: Warner's 4 features vs. our 8-feature set.](slide12_feature_selection.png){width=95%}
+
+## Betting Framework
+
+*[1–2 paragraphs. No profitable edge found at any k threshold with a meaningful sample size. Interpret: what does this imply about the GP's ability to exploit modern lines?]*
+
+![Betting framework: k-threshold win rates for both models.](slide13_betting_framework.png){width=95%}
+
+---
+
+# Discussion
+
+## Key Takeaways
+
+*[Bulleted or paragraph form. Cover the three main findings:]*
+
+1. **Vegas has gotten substantially sharper.** Winner accuracy jumped from ~68.5% (2008–09) to 72.1% (2023–24). The GP stayed at 64.4%. The gap has widened.
+
+2. **Feature selection helps winner prediction but not margin prediction.** Our 8-feature model picks winners at 67.1% vs. Warner's 4-feature 64.4%, but MAE is essentially unchanged (~10 points). More features help identify the right side but not the right magnitude.
+
+3. **No exploitable betting edge.** At every k threshold with a reasonable sample (k ≤ 0.5), win rates fall below the 52.4% break-even. The model rarely disagrees with Vegas by more than one standard deviation on confident games.
+
+## Limitations
+
+*[3–4 bullet points. Consider: no injury data, no weather, no line movement, no roster changes, no divisional/playoff context, Vegas lines incorporate information the model cannot observe.]*
+
+## Future Work
+
+*[2–3 bullet points. What would a stronger model need? What extensions would be interesting?]*
+
+---
+
+# Conclusion
+
+*[1 short paragraph. Restate the central finding in plain language: box-score statistics alone are no longer sufficient to compete with modern Vegas lines.]*
+
+---
+
+# References
+
+Warner, G. (2010). *Winning isn't Everything: A Contextual Analysis of Results in the NFL Using Gaussian Processes.* Proceedings of the MIT Sloan Sports Analytics Conference.
+
+*[Add any additional references used.]*
+
+---
+
+# Appendix: Code
+
+The complete analysis code is available in `nfl_gp_starter.ipynb`. Key sections are reproduced below for reference.
+
+## Data Loading and Feature Construction
+
+```{python}
+import pandas as pd
+import numpy as np
+
+TRAIN_SEASONS = list(range(2015, 2023))
+TEST_SEASONS  = list(range(2023, 2025))
+ALL_SEASONS   = TRAIN_SEASONS + TEST_SEASONS
+
+BASE_STATS = [
+    "points_scored", "points_allowed",
+    "total_yards", "total_yards_allowed",
+    "rush_yards", "rush_yards_allowed",
+    "pass_yards", "pass_yards_allowed",
+    "turnovers_taken", "turnovers_lost",
+]
+
+games = pd.read_csv(
+    "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv",
+    low_memory=False
+)
+games = games[
+    (games["game_type"] == "REG") &
+    (games["result"].notna()) &
+    (games["season"].isin(ALL_SEASONS))
+].copy()
+```
+
+## Computed Strength (Keener Ranking)
+
+```{python}
+def h_func(x):
+    return 0.5 + 0.5 * np.sign(x - 0.5) * np.sqrt(np.abs(2 * x - 1))
+
+def compute_strength(games_df):
+    teams = sorted(set(games_df["home_team"]) | set(games_df["away_team"]))
+    n = len(teams)
+    idx = {t: i for i, t in enumerate(teams)}
+    S = np.zeros((n, n))
+    for _, row in games_df.iterrows():
+        i, j = idx[row["home_team"]], idx[row["away_team"]]
+        S[i][j] += row["home_score"]
+        S[j][i] += row["away_score"]
+    A = np.zeros((n, n))
+    for i in range(n):
+        for j in range(n):
+            total = S[i][j] + S[j][i]
+            if total > 0:
+                A[i][j] = h_func((S[i][j] + 1) / (total + 2))
+    r = np.ones(n) / n
+    for _ in range(200):
+        r_new = A @ r
+        norm = r_new.sum()
+        if norm == 0: break
+        r_new /= norm
+        if np.allclose(r, r_new, atol=1e-10): break
+        r = r_new
+    return dict(zip(teams, r))
+```
+
+## GP Model
+
+```{python}
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import RBF, WhiteKernel
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_absolute_error
+
+GP_FEATURES = ["H_win_pct", "A_win_pct", "A_computed_strength", "A_pass_yards_streak"]
+
+scaler  = StandardScaler()
+X_train = scaler.fit_transform(train_gp[GP_FEATURES])
+X_test  = scaler.transform(test_gp[GP_FEATURES])
+
+kernel = RBF() + WhiteKernel()
+gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=5, normalize_y=True)
+gp.fit(X_train, train_gp["result"].values)
+
+y_pred, y_std = gp.predict(X_test, return_std=True)
+```
+
+## Betting Framework
+
+```{python}
+def evaluate_betting(test_df, k):
+    home_bets = test_df[test_df["gp_pred"] - k * test_df["gp_std"] > test_df["spread_line"]]
+    away_bets = test_df[test_df["gp_pred"] + k * test_df["gp_std"] < test_df["spread_line"]]
+    home_wins = (home_bets["result"] > home_bets["spread_line"]).sum()
+    away_wins = (away_bets["result"] < away_bets["spread_line"]).sum()
+    total_bets = len(home_bets) + len(away_bets)
+    total_wins = int(home_wins + away_wins)
+    win_rate   = total_wins / total_bets if total_bets > 0 else float("nan")
+    return {"k": k, "bets": total_bets, "wins": total_wins, "win_rate": win_rate}
+```

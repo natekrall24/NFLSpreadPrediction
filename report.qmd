@@ -78,7 +78,7 @@ The flexibility of a GP comes at a cost, as fitting a GP requires inverting an $
 
 The kernel is the function that effectively computes a similarity score between any two input points, which determines how much their outputs should be correlated under the prior. The choice of kernel is where the modeling assumptions live, encoding beliefs about the smoothness and structural properties of the underlying function being learned. Different kernels can also be added together to combine assumptions about signal and noise, which is exactly what we do here.
 
-We use the same kernel as Warner, a **squared-exponential (RBF) kernel** plus a **WhiteKernel** to capture irreducible noise.
+We use the same kernel as Warner, a squared-exponential (RBF) kernel plus a WhiteKernel to capture irreducible noise.
 
 $$k(x_i, x_j) = \sigma^2 \exp\left(-\frac{\|x_i - x_j\|^2}{2\ell^2}\right) + \sigma_n^2 \delta_{ij}$$
 

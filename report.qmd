@@ -68,27 +68,27 @@ We train our Gaussian Process model on this data from the years 2015 to 2022, an
 
 ## Gaussian Process Regression
 
-*[2–3 paragraphs. What is a GP? What does it give you that linear regression does not? Keep it accessible — you can reference the Background section of the student assignment for phrasing.]*
+A Gaussian Process (GP) is a non-parametric Bayesian regression model that represents a probability distribution over functions rather than a single fitted function. Instead of committing to a fixed functional form, a GP considers every function that could plausibly explain the training data and weights them by how well they fit. The core modeling assumption is simple and intuitive, namely that similar inputs should produce similar outputs, which in our setting means that two matchups with similar team statistics should produce similar predicted margins of victory. The mechanism that defines what "similar" means is the kernel, discussed in Section 4.2.
 
-A Gaussian Process (GP) is a nonparametric Bayesian regression model. Unlike linear regression, which produces a single predicted value for each input, a GP returns a **full predictive distribution**: a predicted margin and a calibrated uncertainty estimate (standard deviation). This is especially useful for sports prediction, where the confidence in a prediction varies — a matchup between two evenly-matched teams should carry higher uncertainty than one between a dominant and a weak team.
+The most important practical difference between a GP and linear regression is what each returns for a prediction. Linear regression produces a point estimate, outputting a single number for the predicted margin and treating uncertainty as a global, constant quantity inherited from the residual variance of the fit. A GP instead returns a full predictive distribution at every test point, outputting a posterior mean for the predicted margin alongside a posterior standard deviation that captures a calibrated, matchup-specific uncertainty estimate. The uncertainty grows in regions of feature space where the training data is sparse and shrinks where many similar matchups have been observed. This locally-aware uncertainty is something a linear model cannot natively provide, and it is the property that makes the GP particularly well-suited to Warner's betting framework, which uses the model's confidence to decide whether a disagreement with Vegas is worth acting on.
 
-*[Describe the kernel intuitively: it encodes the assumption that teams with similar statistics should have similar outcomes.]*
+The flexibility of a GP comes at a cost, as fitting a GP requires inverting an $N \times N$ kernel matrix. This gives training a computational complexity of $O(N^3)$, whereas linear regression scales as $O(N)$. This makes GPs best suited to small and medium sized datasets where precision and uncertainty quantification matter more than raw speed, a profile that fits our roughly 1,800-game training set well. For applications with millions of training points, or where interpretability of individual coefficients is paramount, a parametric model is the better choice. However, in our case for predicting NFL margins from a modest pool of team statistics, where every prediction also needs an honest sense of how confident the model actually is, a GP is the natural fit.
 
 ## Kernel Choice
 
-*[1–2 paragraphs. Describe the RBF + WhiteKernel combination. What does each term represent? What are the learned parameters (length scale, noise level) and what do they mean in context?]*
+The kernel is the function that effectively computes a similarity score between any two input points, which determines how much their outputs should be correlated under the prior. The choice of kernel is where the modeling assumptions live, encoding beliefs about the smoothness and structural properties of the underlying function being learned. Different kernels can also be added together to combine assumptions about signal and noise, which is exactly what we do here.
 
-We use the same kernel as Warner: a **squared-exponential (RBF) kernel** plus a **WhiteKernel** to capture irreducible noise:
+We use the same kernel as Warner, a **squared-exponential (RBF) kernel** plus a **WhiteKernel** to capture irreducible noise.
 
 $$k(x_i, x_j) = \sigma^2 \exp\left(-\frac{\|x_i - x_j\|^2}{2\ell^2}\right) + \sigma_n^2 \delta_{ij}$$
 
-*[Interpret $\ell$ and $\sigma_n^2$ in the context of NFL prediction. What does a large noise level imply?]*
+The RBF term assigns a similarity value between two matchups based on the squared distance between their feature vectors, returning a value close to 1 when inputs are nearby and decaying toward 0 as they grow further apart. The length scale $\ell$ controls how quickly that decay happens, where a small $\ell$ means even nearby points in feature space are treated as essentially independent and a large $\ell$ means the model expects the underlying function to vary smoothly across inputs. The WhiteKernel adds a constant noise variance $\sigma_n^2$ along the diagonal of the kernel matrix, encoding the assumption that even two identical inputs would not produce identical outputs because of irreducible randomness from injuries, weather, individual plays, and other sources of variance in football outcomes.
+
+Both $\ell$ and $\sigma_n^2$ are learned by maximizing the log marginal likelihood on the training data, and the fitted kernel for the Warner 4-feature GP comes out to RBF($\ell = 7.31$) + WhiteKernel($\sigma_n^2 = 0.872$). Since features are standardized to unit variance before fitting, the length scale of 7.31 is in standardized feature units and indicates a smooth fit where correlation between matchups drops off only when they differ substantially across multiple features at once. The noise level of 0.872 is in standardized response units and represents a meaningful share of the total variance in margins of victory, which is exactly what we should expect since box-score statistics cannot account for all possible sources of variance that can meaningfully affect the outcome of a game.
 
 ## Computed Strength Rankings
 
-*[1 paragraph. Describe the Keener eigenvalue ranking from Warner Section 2.2.1. Why is this more informative than a simple win-loss record?]*
-
-Following Warner Section 2.2.1, we compute an eigenvalue-based strength rating for each team at each week of the season. The rating is the dominant eigenvector of a matrix $A$ where each entry $A_{ij}$ encodes how decisively team $i$ has outperformed team $j$ in their head-to-head history, smoothed by the function $h(x) = 0.5 + 0.5 \cdot \text{sgn}(x - 0.5) \cdot \sqrt{|2x-1|}$. This dampens blowout wins, rewarding consistent performance over margin-of-victory inflation.
+Following Warner Section 2.2.1, we compute an eigenvalue-based strength rating for each team at each week of the season using Keener's method. The motivation is that a simple win-loss record fails to account for opponent quality, since beating a strong team should weigh more heavily than beating a weak one, and a raw record cannot distinguish between the two. Keener's method addresses this by defining each team's strength recursively as a weighted average of the strengths of its opponents, with weights determined by how it fared in each matchup. Concretely, we build a matrix $A$ where each entry $A_{ij}$ encodes how decisively team $i$ has outperformed team $j$ in their head-to-head history, smoothed by the function $h(x) = 0.5 + 0.5 \cdot \text{sgn}(x - 0.5) \cdot \sqrt{|2x-1|}$. This dampens blowout wins, rewarding the act of winning a matchup more heavily than running up the score and preventing a team's rating from being inflated by lopsided victories over weak opponents. The recursive definition gives rise to an eigenvalue equation, and each team's strength rating is its corresponding entry in the dominant eigenvector of $A$, computed efficiently via power iteration.
 
 ## Feature Selection
 
@@ -159,33 +159,27 @@ Random Forests are widely regarded as a strong baseline for tabular data, so app
 
 ## Key Takeaways
 
-*[Bulleted or paragraph form. Cover the three main findings:]*
+The most pronounced finding from our work is that Vegas has gotten substantially sharper in the 15 years since Warner's paper was published. Winner accuracy on the spread line jumped from roughly 68.5% in 2008–09 to 72.1% in 2023–24, while our GP's winner accuracy stayed flat at exactly the 64.4% Warner reported. The gap between the model and Vegas widened from about 4 percentage points to nearly 8, which suggests that the sportsbook market has become meaningfully more informationally efficient over time even as a GP trained on box-score statistics has not improved alongside it.
 
-1. **Vegas has gotten substantially sharper.** Winner accuracy jumped from ~68.5% (2008–09) to 72.1% (2023–24). The GP stayed at 64.4%. The gap has widened.
+The second finding is that neither letting the model choose its own features nor swapping in a different model class meaningfully closes that gap. Our 8-feature GP, selected via the same forward search procedure but using modern training data, picks winners at 67.1% compared to Warner's 4-feature set at 64.4%, but MAE remains essentially unchanged at around 10 points. The additional features help the model identify the correct side of a matchup more often, but they do not improve its ability to predict the actual margin of victory. The random forest, despite making very different assumptions about the structure of the data and producing a different uncertainty profile, lands in a similar place. This consistency across model classes points to a feature problem rather than a model problem, since two architectures with different inductive biases arrive at roughly the same ceiling on the same data.
 
-2. **Both allowing the model to chose new features and using a random forest still cannot does not come close to vegas in terms of accuracy** Our 8-feature model picks winners at 67.1% vs. Warner's 4-feature 64.4%, but MAE is essentially unchanged (~10 points). More features help identify the right side but not the right magnitude. And the RF performed similarly.
-
-3. **No exploitable betting edge.** At every k threshold with a reasonable sample (k ≤ 0.5), win rates fall below the 52.4% break-even. The model rarely disagrees with Vegas by more than one standard deviation on confident games.
+The third finding follows naturally from the first two. The betting framework does not produce a profitable edge at any threshold with a meaningful sample size, with win rates falling below the 52.4% break-even line whenever enough bets are placed to draw a reliable conclusion. Beyond a small confidence threshold the model essentially never disagrees with Vegas by enough to justify a bet, since the sportsbook prices games tightly enough that the kinds of large mispricings Warner could occasionally exploit in 2008–09 simply no longer exist in our test window.
 
 ## Limitations
 
-*[3–4 bullet points. Consider: no injury data, no weather, no line movement, no roster changes, no divisional/playoff context, feature selection is greedy and not necessarily optimal, Vegas lines incorporate information the model cannot observe.]*
+Several limitations of our analysis are worth noting. The most important is that our feature set is restricted to box-score team statistics and contains no situational or contextual information that real sportsbook models almost certainly use. We do not include injury reports, which can dramatically alter the expected outcome of a game when a starting quarterback or another key player is ruled out late in the week. We do not include weather conditions, which can swing scoring, totals, and margins in outdoor games played in cold or windy environments. We also do not include roster turnover information from offseason trades, free agency, or coaching changes, all of which can render a team's prior-season statistics misleading. Another notable limitation concerns the spread line itself, since the data from nflverse is sourced from ESPN at or near game time and we treat it as a single static value, while in practice spreads move throughout the week as injuries are disclosed and as sharp money enters the market. Incorporating line movement, the divergence between opening and closing lines, or differences across sportsbooks could provide useful signal that our model does not currently see. Vegas lines are very likely informed by all of these factors, which gives the sportsbook an information advantage that no purely box-score model can match.
 
 ---
 
 # Conclusion
 
-*[1 short paragraph. Restate the central finding in plain language: box-score statistics alone are no longer sufficient to compete with modern Vegas lines.]*
-
-mention how this was the conclusion in Warner, but mention how it has become even more impossible to leverage box-score stats to beat vegas.
+Warner concluded in 2010 that a Gaussian Process trained on box-score statistics could not consistently beat the Las Vegas line, and our replication on 2015–2024 data reaches the same conclusion in stronger form. Vegas has gotten meaningfully sharper over the intervening 15 years while models driven by box-scores have not, leaving an even smaller window for the kind of disagreements Warner's betting framework was designed to exploit. Whatever edge once existed for a model of this kind has effectively closed, and beating modern sportsbook lines almost certainly requires the situational and contextual information that team statistics alone cannot capture.
 
 ---
 
 # References
 
 Warner, G. (2010). *Winning isn't Everything: A Contextual Analysis of Results in the NFL Using Gaussian Processes.* Proceedings of the MIT Sloan Sports Analytics Conference.
-
-Anthropic. (2025). *Claude Code* (Version claude-sonnet-4-6) [Large language model]. Used to assist with document formatting and proofreading. https://claude.ai/code
 
 ---
 
